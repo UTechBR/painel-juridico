@@ -70,8 +70,18 @@ nav button[aria-current=true]{color:var(--txt);border-bottom-color:var(--ac);fon
 .vazio{padding:28px;text-align:center;color:var(--mut);background:var(--soft);border-radius:8px}
 dialog{border:0;border-radius:10px;padding:0;width:min(820px,94vw);max-height:88vh;box-shadow:0 10px 40px rgba(0,0,0,.28)}
 dialog::backdrop{background:rgba(26,26,26,.5)}
-.dlg{padding:20px;overflow:auto;max-height:88vh}
-.dlg h2{margin:0 0 4px;font-size:19px}
+.dlg{display:flex;flex-direction:column;max-height:88vh;overflow:hidden}
+.dlg h2{margin:0;font-size:19px}
+.dh{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:16px 20px 12px;border-bottom:1px solid var(--linha)}
+.dh .mut{font-size:14px;margin-top:2px}
+.dh button.x{border:0;background:none;font-size:28px;line-height:.8;padding:2px 8px;color:var(--mut);border-radius:6px}
+.dh button.x:hover{background:var(--soft);color:var(--txt)}
+.db{padding:14px 20px 18px;overflow:auto;flex:1 1 auto}
+.df{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 20px;border-top:1px solid var(--linha);background:var(--soft)}
+.df .esp{flex:1}
+.df .fmsg{font-size:14px}.fmsg.ok{color:var(--ok)}.fmsg.err{color:var(--err)}.fmsg.info{color:var(--mut)}
+.sec{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0 6px}
+.sec h3{margin:0;flex:1}
 .com{border:1px solid var(--linha);border-radius:8px;padding:10px 12px;margin-top:10px}
 .com.nova{background:#FFF7F7}
 .com .l1{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-weight:700}
@@ -105,6 +115,7 @@ dialog::backdrop{background:rgba(26,26,26,.5)}
 .dgrid select{width:100%}
 .dados{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:4px 16px;font-size:14px;margin:6px 0 4px}
 .dlg h3{margin:18px 0 6px;font-size:14px}
+.sec h3{margin:0}
 .ev{border-top:1px solid var(--linha);padding:8px 0;font-size:14px}
 .ev .mut{font-size:12px}
 .ev a{color:var(--ac)}
@@ -143,6 +154,31 @@ window.NUCLEO = (function () {
   const MAPA_COLUNAS = { 'NUMERO PROPOSTA': 'proposta', 'PARCEIRO': 'parceiro', 'LOJA': 'loja', 'NOME CORRETOR': 'corretor', 'NOME COMERCIAL': 'comercial',
     'NOME REGIONAL': 'regional', 'UF': 'uf', 'UF SIGLA': 'uf', 'ORGAO': 'orgaoBanco', 'SIGLA ORGAO': 'orgaoBanco', 'NUMERO DA PROPOSTA': 'proposta', 'ESTRATEGIA FINAL': 'estrategia', 'RESULTADO/ESTOQUE': 'resultado',
     'STATUS OPERACAO': 'statusOperacao', 'SAFRA DE ENTRADA': 'safraEntrada', 'VLR CBK': 'valorCbk' };
+  // Texto de arquivo do banco: sem acento, sem caractere especial ou de substituição (� ? !); só letras, números e pontuação simples.
+  function padronizarTexto(v) {
+    return String(v == null ? '' : v).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9 .,;:\-_\/&()%@#+]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  // CSV com aspas, vírgula/ponto e vírgula/tab (detecta sozinho). Devolve linhas de células (texto).
+  function parseCsv(txt, delim) {
+    txt = String(txt == null ? '' : txt).replace(/^\uFEFF/, '');
+    if (!delim) {
+      const am = txt.split(/\r?\n/).slice(0, 5).join('\n');
+      const pv = (am.match(/;/g) || []).length, vi = (am.match(/,/g) || []).length;
+      delim = am.includes('\t') ? '\t' : (pv > 0 && pv >= vi ? ';' : ',');
+    }
+    const linhas = []; let lin = [], cel = '', aspas = false;
+    const fechaLinha = () => { lin.push(cel); cel = ''; if (lin.some(c => c.trim() !== '')) linhas.push(lin); lin = []; };
+    for (let i = 0; i < txt.length; i++) {
+      const c = txt[i];
+      if (aspas) { if (c === '"') { if (txt[i + 1] === '"') { cel += '"'; i++; } else aspas = false; } else cel += c; }
+      else if (c === '"' && cel === '') aspas = true;
+      else if (c === delim) { lin.push(cel); cel = ''; }
+      else if (c === '\n') fechaLinha();
+      else if (c !== '\r') cel += c;
+    }
+    if (cel !== '' || lin.length) fechaLinha();
+    return linhas;
+  }
   const normCab = c => semAcento(c).replace(/\s+/g, ' ').trim();
 
   // Varre TODAS as células de cada planilha atrás de número CNJ válido (com ou sem máscara).
@@ -176,8 +212,8 @@ window.NUCLEO = (function () {
             else if (opts.inferir && !mapa && !opts.bancoPadrao && cel.filter(Boolean).length <= 3) banco = cel.find((x, k) => k !== j && /[A-Za-zÀ-ÿ]/.test(x)) || '';
             if (!banco) banco = opts.bancoPadrao || '';
             const dados = {};
-            if (mapa) mapa.forEach((key, k) => { const v = (cel[k] || '').trim(); if (v) dados[key] = v.slice(0, 80); });
-            validos.push({ numero: d, banco: banco.slice(0, 60), dados });
+            if (mapa) mapa.forEach((key, k) => { const v = padronizarTexto(cel[k]); if (v) dados[key] = v.slice(0, 80); });
+            validos.push({ numero: d, banco: padronizarTexto(banco).slice(0, 60), dados });
           }
         });
       });
@@ -186,7 +222,7 @@ window.NUCLEO = (function () {
   }
   function extrairDeLinhas(linhas, opts) { return extrairDeFolhas([linhas], opts); }
   function lerLista(texto, opts) {
-    const linhas = String(texto || '').split(/\r?\n/).map(l => l.split(/\t|;|,/));
+    const linhas = parseCsv(texto);
     return extrairDeLinhas(linhas, Object.assign({ inferir: true }, opts || {}));
   }
 
@@ -320,7 +356,7 @@ window.NUCLEO = (function () {
   function emailValido(e) { return /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(String(e || '')) && String(e).length <= 254; }
 
   return { semAcento, soDigitos, cnjValido, mascaraCnj, extrairDeFolhas, extrairDeLinhas, lerLista, limparTexto, mascararCpf,
-    linkSeguro, nomesNormalizados, ehNome, normalizar, mudancas, agrupar, somarDias, fmtData, emailValido, ROTULOS_DADOS, nomeDeEmail, contar, linhasExportacao };
+    linkSeguro, nomesNormalizados, ehNome, normalizar, mudancas, agrupar, somarDias, fmtData, emailValido, ROTULOS_DADOS, nomeDeEmail, contar, linhasExportacao, padronizarTexto, parseCsv };
 })();
 </script>
 
@@ -774,6 +810,22 @@ function renderPainel(alvo) {
     h('div', { class: 'painel' }, cardParc, cardStatus, cardResp, cardBanco));
 }
 
+/* ---------- Janelas: padrão único (título + X no topo, conteúdo no meio, botões no rodapé) ---------- */
+// Rodapé: ações secundárias à esquerda, "Fechar/Cancelar" e a ação principal (Salvar...) à direita.
+function montarJanela(d, titulo, sub, corpo, rodape, manter) {
+  const antigo = d.querySelector('.db'), rolagem = manter && antigo ? antigo.scrollTop : 0;
+  const ativo = manter && d.contains(document.activeElement) ? document.activeElement : null;
+  const chave = ativo ? ativo.getAttribute('aria-label') : null, pos = ativo && ativo.selectionStart != null ? ativo.selectionStart : null;
+  const db = h('div', { class: 'db' }, corpo);
+  d.replaceChildren(h('div', { class: 'dlg' },
+    h('div', { class: 'dh' }, h('div', {}, h('h2', { text: titulo }), sub ? h('div', { class: 'mut', text: sub }) : null),
+      h('button', { class: 'x', type: 'button', 'aria-label': 'Fechar janela', title: 'Fechar', text: '×', onclick: () => d.close() })),
+    db, rodape ? h('div', { class: 'df' }, rodape) : null));
+  db.scrollTop = rolagem;
+  if (chave) { const novo = [...d.querySelectorAll('[aria-label]')].find(e => e.getAttribute('aria-label') === chave); if (novo) { novo.focus(); if (pos != null && novo.setSelectionRange) try { novo.setSelectionRange(pos, pos); } catch (e) { /* campo sem seleção */ } } }
+}
+const esp = () => h('span', { class: 'esp' });
+
 /* ---------- Novo processo (cadastro manual) ---------- */
 function abrirNovo() {
   const d = $('#novo');
@@ -800,14 +852,12 @@ function abrirNovo() {
     d.close(); S.aba = 'carteira'; S.filtro = ''; S.soPend = false; S.f = FILTROS_ZERO(); montarBarra(); render();
     executar('Consultando processo', () => consultarProcessos([{ id: num }]));
   } });
-  d.replaceChildren(h('div', { class: 'dlg' }, h('h2', { text: 'Novo processo' }),
-    h('div', { class: 'mut', text: 'Para ações que não vieram nos arquivos dos bancos. Depois de cadastrar, buscamos as publicações do processo no DJEN.' }),
-    h('label', { text: 'Número do processo (CNJ)' }), cnj,
-    h('div', { class: 'dgrid' }, h('div', {}, h('label', { text: 'Origem' }), origem), h('div', {}, h('label', { text: 'Banco' }), banco),
-      h('div', {}, h('label', { text: 'Status' }), st), h('div', {}, h('label', { text: 'Responsável' }), resp)),
-    h('label', { text: 'Tipo de ação' }), tipo, h('label', { text: 'Parte ativa' }), autor, h('label', { text: 'Observação' }), nota,
-    h('div', { style: 'margin-top:10px' }, msg),
-    h('div', { class: 'barra', style: 'margin-top:6px' }, salvar, h('span', { class: 'esp' }), h('button', { text: 'Fechar', onclick: () => d.close() }))));
+  montarJanela(d, 'Novo processo', 'Para ações que não vieram nos arquivos dos bancos. Depois de cadastrar, buscamos as publicações do processo no DJEN.',
+    [h('label', { text: 'Número do processo (CNJ)' }), cnj,
+     h('div', { class: 'dgrid' }, h('div', {}, h('label', { text: 'Origem' }), origem), h('div', {}, h('label', { text: 'Banco' }), banco),
+       h('div', {}, h('label', { text: 'Status' }), st), h('div', {}, h('label', { text: 'Responsável' }), resp)),
+     h('label', { text: 'Tipo de ação' }), tipo, h('label', { text: 'Parte ativa' }), autor, h('label', { text: 'Observação' }), nota],
+    [msg, esp(), h('button', { text: 'Cancelar', onclick: () => d.close() }), salvar]);
   d.showModal();
 }
 
@@ -874,7 +924,7 @@ function blocoRagjur(id, p) {
 /* ---------- Detalhe do processo ---------- */
 function abrirDetalhe(id) {
   if (subEventos) { subEventos(); subEventos = null; }
-  S.detalhe = id; S.eventos = []; S.rascunho = { nota: '', aTit: '', aUrl: '' };
+  S.detalhe = id; S.eventos = []; S.rascunho = { status: null, resp: null, nota: '', aTit: '', aUrl: '', msg: null };
   subEventos = armazem.assinarPor('eventos', 'processo', id, d => { S.eventos = d; if (S.detalhe === id) renderDetalhe(); }, () => {});
   renderDetalhe(); const d = $('#detalhe'); if (!d.open) d.showModal();
 }
@@ -889,46 +939,52 @@ function renderDetalhe() {
     for (const e of evs) await armazem.remover('eventos', e.id);
     if (p) await armazem.remover('processos', id);
   };
-  const lista = statusLista(), stAtual = p ? (p.status || lista[0]) : '';
-  const selStatus = p ? h('select', { 'aria-label': 'Status', onchange: async e => { const novo = e.target.value; await atualizarProc(id, { status: novo }); await registrar(id, 'status', stAtual + ' → ' + novo); } },
+  const lista = statusLista(), stAtual = p ? (p.status || lista[0]) : '', respAtual = p ? (p.responsavel || '') : '';
+  const stSel = R.status == null ? stAtual : R.status, rpSel = R.resp == null ? respAtual : R.resp;
+  const selStatus = p ? h('select', { 'aria-label': 'Status', onchange: e => { R.status = e.target.value; } },
     (lista.includes(stAtual) ? lista : [stAtual].concat(lista)).map(x => h('option', { value: x, text: x }))) : null;
-  if (selStatus) selStatus.value = stAtual;
-  const respAtual = p ? (p.responsavel || '') : '';
-  const selResp = p ? h('select', { 'aria-label': 'Responsável', onchange: async e => { const novo = e.target.value; await atualizarProc(id, { responsavel: novo }); await registrar(id, 'responsavel', (respAtual || 'ninguém') + ' → ' + (novo || 'ninguém')); } },
-    h('option', { value: '', text: 'Sem responsável' }), (responsaveis().includes(respAtual) || !respAtual ? responsaveis() : [respAtual].concat(responsaveis())).map(e => h('option', { value: e, text: N.nomeDeEmail(e) }))) : null;
-  if (selResp) selResp.value = respAtual;
+  if (selStatus) selStatus.value = stSel;
+  const resps = responsaveis(), selResp = p ? h('select', { 'aria-label': 'Responsável', onchange: e => { R.resp = e.target.value; } },
+    h('option', { value: '', text: 'Sem responsável' }), (!respAtual || resps.includes(respAtual) ? resps : [respAtual].concat(resps)).map(e => h('option', { value: e, text: N.nomeDeEmail(e) }))) : null;
+  if (selResp) selResp.value = rpSel;
   const dados = p && p.dados ? Object.entries(N.ROTULOS_DADOS).filter(([k]) => p.dados[k]).map(([k, rot]) => h('div', {}, h('span', { class: 'mut', text: rot + ': ' }), p.dados[k])) : [];
   const extras = p ? [p.tipoAcao ? ['Tipo de ação', p.tipoAcao] : null, p.autor ? ['Parte ativa informada', p.autor] : null, ['Origem', ORIGENS[p.origem || 'banco'] || '']].filter(Boolean) : [];
   const nota = h('textarea', { rows: 2, maxlength: 2000, placeholder: 'Escreva uma anotação (andamento, orientação, quem falou com quem…)', 'aria-label': 'Nova anotação', oninput: e => { R.nota = e.target.value; } }); nota.value = R.nota;
   const aTit = h('input', { type: 'text', maxlength: 100, placeholder: 'Nome do documento', 'aria-label': 'Nome do anexo', oninput: e => { R.aTit = e.target.value; } }); aTit.value = R.aTit;
   const aUrl = h('input', { type: 'url', maxlength: 500, placeholder: 'Link https:// (SharePoint, Drive…)', 'aria-label': 'Link do anexo', oninput: e => { R.aUrl = e.target.value; } }); aUrl.value = R.aUrl;
-  const msgA = h('div', {});
   const evs = S.eventos.slice().sort((a, b) => (b.em || '').localeCompare(a.em || ''));
-  d.replaceChildren(h('div', { class: 'dlg' },
-    h('h2', { text: N.mascaraCnj(id) }),
-    h('div', { class: 'mut', text: [g && g.tribunal, p && p.banco, g && g.unica ? 'Única: ' + (PAPEIS[g.papel] || '—') : '', p && p.consultadoEm ? 'consultado em ' + fmtHora(p.consultadoEm) : ''].filter(Boolean).join(' · ') }),
-    p ? h('div', { class: 'dgrid' }, h('div', {}, h('label', { text: 'Status' }), selStatus), h('div', {}, h('label', { text: 'Responsável' }), selResp)) : null,
-    h('div', { class: 'barra', style: 'margin-top:10px' },
-      !p ? h('button', { class: 'pri', text: 'Acompanhar este processo', title: 'Coloca o processo na aba Processos, com status e responsável', onclick: async () => {
-        await armazem.gravar('processos', id, docProcesso({ numero: id, origem: 'unica', autor: g && g.ativa.length ? g.ativa[0] : '' }), false);
-        await registrar(id, 'criado', 'Passou a ser acompanhado (cita a Única)'); } }) : null,
-      p ? h('button', { text: 'Consultar de novo', disabled: S.rodando, onclick: () => { d.close(); executar('Consultando', () => consultarProcessos([p])); } }) : null,
-      g && g.pend ? h('button', { text: 'Marcar todas como tratadas', onclick: () => comms.filter(c => !c.tratada).forEach(c => marcar(c, true)) }) : null,
-      ehAdmin() ? botaoConfirmar('Remover processo', remover) : null,
-      h('span', { class: 'esp' }), h('button', { text: 'Fechar', onclick: () => d.close() })),
+  // Um único "Salvar" grava status, responsável, anotação e anexo de uma vez.
+  const salvar = async () => {
+    R.msg = null;
+    const mudaSt = R.status != null && R.status !== stAtual, mudaRp = R.resp != null && R.resp !== respAtual;
+    const nt = R.nota.trim(), temAnexo = !!(R.aTit.trim() || R.aUrl.trim());
+    let url = '';
+    if (temAnexo) { url = N.linkSeguro(R.aUrl.trim()); if (!url.startsWith('https://')) { R.msg = { t: 'err', x: 'O link do anexo precisa começar com https://' }; renderDetalhe(); return; } }
+    if (!mudaSt && !mudaRp && !nt && !temAnexo) { R.msg = { t: 'info', x: 'Nada para salvar.' }; renderDetalhe(); return; }
+    try {
+      if (mudaSt || mudaRp) await atualizarProc(id, { ...(mudaSt ? { status: R.status } : {}), ...(mudaRp ? { responsavel: R.resp } : {}) });
+      if (mudaSt) await registrar(id, 'status', stAtual + ' → ' + R.status);
+      if (mudaRp) await registrar(id, 'responsavel', (respAtual || 'ninguém') + ' → ' + (R.resp || 'ninguém'));
+      if (nt) await registrar(id, 'nota', nt);
+      if (temAnexo) await registrar(id, 'anexo', R.aTit.trim() || 'Documento', url);
+      Object.assign(R, { status: null, resp: null, nota: '', aTit: '', aUrl: '', msg: { t: 'ok', x: 'Salvo.' } });
+    } catch (e) { R.msg = { t: 'err', x: 'Não consegui salvar. Tente de novo.' }; }
+    renderDetalhe();
+  };
+  const sub = [g && g.tribunal, p && p.banco, g && g.unica ? 'Única: ' + (PAPEIS[g.papel] || '—') : '', p && p.consultadoEm ? 'consultado em ' + fmtHora(p.consultadoEm) : ''].filter(Boolean).join(' · ');
+  montarJanela(d, N.mascaraCnj(id), sub, [
+    p ? h('div', { class: 'dgrid', style: 'margin-top:0' }, h('div', {}, h('label', { text: 'Status' }), selStatus), h('div', {}, h('label', { text: 'Responsável' }), selResp)) : null,
     p && (dados.length || extras.length) ? h('div', { class: 'dados' }, extras.map(([r, v]) => h('div', {}, h('span', { class: 'mut', text: r + ': ' }), v)), dados) : null,
-    p ? [h('h3', { text: 'Anotações e anexos' }),
-      nota, h('div', { class: 'barra', style: 'margin:6px 0 10px' }, h('button', { text: 'Salvar anotação', onclick: async () => { const t = R.nota.trim(); if (!t) return; R.nota = ''; await registrar(id, 'nota', t); } })),
-      h('div', { class: 'dgrid', style: 'margin:0' }, aTit, aUrl),
-      h('div', { class: 'barra', style: 'margin:6px 0 4px' }, h('button', { text: 'Anexar link', onclick: async () => {
-        const u = N.linkSeguro(R.aUrl.trim());
-        if (!u.startsWith('https://')) { msgA.replaceChildren(h('div', { class: 'msg err', text: 'Informe um link que comece com https://' })); return; }
-        const t = R.aTit.trim() || 'Documento'; R.aTit = ''; R.aUrl = ''; await registrar(id, 'anexo', t, u); } })), msgA,
-      evs.length ? evs.map(e => h('div', { class: 'ev' }, h('div', { class: 'mut', text: fmtHora(e.em) + ' · ' + N.nomeDeEmail(e.por) + ' · ' + (TIPOS_EVENTO[e.tipo] || e.tipo) }),
-        (() => { const u = e.url ? N.linkSeguro(e.url) : ''; return u.startsWith('https://') ? h('a', { href: u, target: '_blank', rel: 'noopener noreferrer', text: e.texto || u }) : h('div', { text: e.texto, style: 'white-space:pre-wrap' }); })()))
-        : h('div', { class: 'mut', text: 'Nenhuma anotação ainda.' })] : null,
-    p && ragjurAtivo() ? blocoRagjur(id, p) : null,
-    h('h3', { text: 'Publicações no DJEN' }),
+    p ? [h('h3', { text: 'Anotações e anexos' }), nota,
+      h('div', { class: 'dgrid', style: 'margin:8px 0 0' }, aTit, aUrl),
+      evs.length ? h('div', { style: 'margin-top:10px' }, evs.map(e => h('div', { class: 'ev' }, h('div', { class: 'mut', text: fmtHora(e.em) + ' · ' + N.nomeDeEmail(e.por) + ' · ' + (TIPOS_EVENTO[e.tipo] || e.tipo) }),
+        (() => { const u = e.url ? N.linkSeguro(e.url) : ''; return u.startsWith('https://') ? h('a', { href: u, target: '_blank', rel: 'noopener noreferrer', text: e.texto || u }) : h('div', { text: e.texto, style: 'white-space:pre-wrap' }); })())))
+        : h('div', { class: 'mut', style: 'margin-top:8px', text: 'Nenhuma anotação ainda.' })] : null,
+    p && ragjurAtivo() ? blocoRagjur(id, p)
+      : (p ? [h('h3', { text: 'Jurisprudência e estratégia (RAGJur)' }), h('div', { class: 'mut', text: 'Ainda não ligado. O administrador precisa concluir a configuração do RAGJur (arquivo RAGJUR-LEIAME.md).' })] : null),
+    h('div', { class: 'sec' }, h('h3', { text: 'Publicações no DJEN' }),
+      p ? h('button', { text: 'Consultar de novo', disabled: S.rodando, onclick: () => { d.close(); executar('Consultando', () => consultarProcessos([p])); } }) : null,
+      g && g.pend ? h('button', { text: 'Marcar todas como tratadas', onclick: () => comms.filter(c => !c.tratada).forEach(c => marcar(c, true)) }) : null),
     comms.length ? comms.map(c => h('div', { class: 'com' + (c.tratada ? '' : ' nova') },
       h('div', { class: 'l1' }, N.fmtData(c.data), ' · ', c.tipo, c.documento ? ' · ' + c.documento : '',
         c.tratada ? h('span', { class: 'tag ok', text: 'tratada' }) : h('span', { class: 'tag al', text: 'nova' }),
@@ -943,7 +999,14 @@ function renderDetalhe() {
         h('span', { class: 'esp' }),
         c.tratada ? h('span', { class: 'mut', text: 'por ' + (c.tratadaPor || '—') + ' em ' + fmtHora(c.tratadaEm) }) : null,
         h('button', { text: c.tratada ? 'Reabrir' : 'Marcar como tratada', onclick: () => marcar(c, !c.tratada) }))))
-    : h('div', { class: 'vazio', style: 'margin-top:8px', text: 'Nenhuma publicação deste processo no DJEN até agora.' })));
+    : h('div', { class: 'vazio', text: 'Nenhuma publicação deste processo no DJEN até agora.' })],
+  [ehAdmin() && p ? botaoConfirmar('Remover processo', remover) : null,
+   R.msg ? h('span', { class: 'fmsg ' + R.msg.t, text: R.msg.x }) : null, esp(),
+   h('button', { text: 'Fechar', onclick: () => d.close() }),
+   p ? h('button', { class: 'pri', text: 'Salvar', onclick: salvar })
+     : h('button', { class: 'pri', text: 'Acompanhar este processo', title: 'Coloca o processo na aba Processos, com status e responsável', onclick: async () => {
+        await armazem.gravar('processos', id, docProcesso({ numero: id, origem: 'unica', autor: g && g.ativa.length ? g.ativa[0] : '' }), false);
+        await registrar(id, 'criado', 'Passou a ser acompanhado (cita a Única)'); } })], true);
 }
 
 /* ---------- Importar arquivos dos bancos ---------- */
@@ -968,7 +1031,11 @@ async function lerArquivo(f) {
     const wb = X.read(await f.arrayBuffer(), { type: 'array' });
     return wb.SheetNames.map(sn => X.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: false, defval: '' }));
   }
-  if (/\.(csv|txt)$/.test(nome)) return [(await f.text()).split(/\r?\n/).map(l => l.split(/\t|;|,/))];
+  if (/\.(csv|txt)$/.test(nome)) {
+    const buf = await f.arrayBuffer(); let txt;
+    try { txt = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (e) { txt = new TextDecoder('windows-1252').decode(buf); } // CSV salvo pelo Excel antigo
+    return [N.parseCsv(txt)];
+  }
   throw new Error('Formato não suportado. Envie Excel (.xlsx, .xls) ou CSV, ou cole a lista.');
 }
 function abrirImportar() {
@@ -1006,11 +1073,9 @@ function abrirImportar() {
     if (lote.length) executar('Consultando processos', () => consultarProcessos(lote.map(v => ({ id: v.numero }))));
     else aviso('Dados atualizados em ' + upd.length + ' processo(s).', 'ok');
   });
-  d.replaceChildren(h('div', { class: 'dlg' }, h('h2', { text: 'Importar processos' }),
-    h('div', { class: 'mut', text: 'Envie o arquivo do banco (Excel ou CSV). A ferramenta acha o número do processo em qualquer coluna e guarda também parceiro, loja, corretor, regional, UF, estratégia e status da operação. CPF e nome do digitador nunca são lidos.' }),
-    h('label', { text: 'Arquivo' }), arq, h('label', { text: 'Banco' }), banco, h('label', { text: 'ou lista colada' }), area,
-    h('div', { class: 'barra', style: 'margin-top:12px' }, h('button', { text: 'Ler', onclick: ler })), res,
-    h('div', { class: 'barra', style: 'margin-top:12px' }, btnAdd, h('span', { class: 'esp' }), h('button', { text: 'Fechar', onclick: () => d.close() }))));
+  montarJanela(d, 'Importar processos', 'Envie o arquivo do banco (Excel ou CSV). A ferramenta acha o número do processo em qualquer coluna e guarda também parceiro, loja, corretor, regional, UF, estratégia e status da operação. Acentos e caracteres especiais são padronizados; CPF e nome do digitador nunca são lidos.',
+    [h('label', { text: 'Arquivo' }), arq, h('label', { text: 'Banco' }), banco, h('label', { text: 'ou lista colada' }), area, h('div', { style: 'margin-top:12px' }, res)],
+    [esp(), h('button', { text: 'Cancelar', onclick: () => d.close() }), h('button', { text: 'Ler', onclick: ler }), btnAdd]);
   d.showModal();
 }
 
@@ -1032,14 +1097,13 @@ function gruposImportacao() {
 }
 function abrirImportacoes() {
   const d = $('#lotes'); const grupos = gruposImportacao();
-  d.replaceChildren(h('div', { class: 'dlg' }, h('h2', { text: 'Importações' }),
-    h('div', { class: 'mut', text: 'Cada linha é um arquivo (ou lista) que entrou de uma vez. Excluir remove os processos dele, as anotações e as publicações guardadas desses processos. Não dá para desfazer.' }),
-    grupos.length ? h('table', { class: 'tab', style: 'margin-top:12px' }, h('thead', {}, h('tr', {}, ['Quando', 'Por', 'Banco', 'Processos', ''].map(c => h('th', { scope: 'col', text: c })))),
+  montarJanela(d, 'Importações', 'Cada linha é um arquivo (ou lista) que entrou de uma vez. Excluir remove os processos dele, as anotações e as publicações guardadas desses processos. Não dá para desfazer.',
+    grupos.length ? h('table', { class: 'tab' }, h('thead', {}, h('tr', {}, ['Quando', 'Por', 'Banco', 'Processos', ''].map(c => h('th', { scope: 'col', text: c })))),
       h('tbody', {}, grupos.map(g => h('tr', {}, h('td', { text: fmtHora(g.inicio) }), h('td', { text: N.nomeDeEmail(g.por) || '—', title: g.por }), h('td', { text: g.bancos.join(', ') || '—' }),
         h('td', {}, String(g.ps.length), g.trabalhados ? h('div', { class: 'mut', text: g.trabalhados + ' já com status/responsável' }) : null),
         h('td', {}, botaoConfirmar('Excluir importação', () => { d.close(); excluirImportacao(g); }, 'link'))))))
-      : h('div', { class: 'vazio', style: 'margin-top:12px', text: 'Nenhuma importação de banco encontrada.' }),
-    h('div', { class: 'barra', style: 'margin-top:12px' }, h('span', { class: 'esp' }), h('button', { text: 'Fechar', onclick: () => d.close() }))));
+      : h('div', { class: 'vazio', text: 'Nenhuma importação de banco encontrada.' }),
+    [esp(), h('button', { text: 'Fechar', onclick: () => d.close() })]);
   d.showModal();
 }
 function excluirImportacao(g) {
