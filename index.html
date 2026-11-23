@@ -399,6 +399,7 @@ function armazemLocal() {
     modo: 'demo',
     assinar(c, cb) { (subs[c] = subs[c] || []).push(cb); cb(lista(c)); return () => { subs[c] = subs[c].filter(f => f !== cb); }; },
     token: async () => 'demo',
+    async listarPor(c, campo, valor) { return lista(c).filter(x => x[campo] === valor); },
     assinarPor(c, campo, valor, cb) { const f = l => cb(l.filter(x => x[campo] === valor)); (subs[c] = subs[c] || []).push(f); f(lista(c)); return () => { subs[c] = subs[c].filter(x => x !== f); }; },
     assinarDoc(c, id, cb) { cb({ id, perfil: 'admin', ativo: true }); return () => {}; },
     async gravar(c, id, dados, mesclar) { const at = col(c)[id]; col(c)[id] = mesclar && at ? { ...at, ...dados } : { ...dados }; salvar(); emitir(c); },
@@ -421,6 +422,7 @@ async function armazemFirebase() {
     reenviarLink: () => auth.currentUser ? A.sendEmailVerification(auth.currentUser) : Promise.resolve(),
     recarregar: async () => { const u = auth.currentUser; if (!u) return null; await u.reload(); await u.getIdToken(true); return info(u); },
     sair: () => A.signOut(auth),
+    listarPor: async (c, campo, valor) => (await F.getDocs(F.query(F.collection(fs, c), F.where(campo, '==', valor)))).docs.map(d => ({ id: d.id, ...d.data() })),
     token: async () => { const u = auth.currentUser; if (!u) throw new Error('Entre de novo na ferramenta.'); return u.getIdToken(); },
     aoMudarUsuario: cb => A.onAuthStateChanged(auth, u => cb(info(u))),
     assinar: (c, cb, onErro) => F.onSnapshot(F.collection(fs, c), s => cb(s.docs.map(d => ({ id: d.id, ...d.data() }))), e => onErro && onErro(e)),
@@ -584,7 +586,7 @@ function montarApp() {
       h('button', { text: t, 'data-aba': k, onclick: () => { S.aba = k; S.filtro = ''; S.f = FILTROS_ZERO(); montarBarra(); render(); } }))),
     h('div', { id: 'aviso' }), h('div', { id: 'progresso' }),
     h('div', { id: 'barra' }), h('div', { id: 'lista' }),
-    h('dialog', { id: 'detalhe' }), h('dialog', { id: 'importar' }), h('dialog', { id: 'novo' })), triangulos());
+    h('dialog', { id: 'detalhe' }), h('dialog', { id: 'importar' }), h('dialog', { id: 'novo' }), h('dialog', { id: 'lotes' })), triangulos());
   $('#detalhe').addEventListener('close', () => { S.detalhe = null; S.eventos = []; if (subEventos) { subEventos(); subEventos = null; } });
   if (armazem.modo === 'demo') $('#banner').append(h('div', { class: 'msg al', text: 'Modo demonstração: os dados ficam só neste navegador e não são compartilhados. Para o time usar, configure o Firebase (veja o LEIA-ME).' }));
   montarBarra(); render();
@@ -621,6 +623,7 @@ function montarBarra() {
       h('button', { text: 'Importar arquivo ou lista', onclick: abrirImportar }),
       h('button', { text: 'Atualizar todos', disabled: S.rodando, onclick: atualizarCarteira }),
       h('span', { class: 'esp' }),
+      ehAdmin() ? h('button', { text: 'Importações', onclick: abrirImportacoes }) : null,
       h('button', { text: 'Exportar Excel', onclick: exportarExcel })),
     h('div', { class: 'barra' }, busca,
       sel('Status', S.f.status, [['', 'Todos os status'], ['__aberto', 'Em aberto']].concat(statusLista().map(x => [x, x])), 'status'),
@@ -1009,6 +1012,50 @@ function abrirImportar() {
     h('div', { class: 'barra', style: 'margin-top:12px' }, h('button', { text: 'Ler', onclick: ler })), res,
     h('div', { class: 'barra', style: 'margin-top:12px' }, btnAdd, h('span', { class: 'esp' }), h('button', { text: 'Fechar', onclick: () => d.close() }))));
   d.showModal();
+}
+
+/* ---------- Importações (admin): ver e excluir um arquivo importado inteiro ---------- */
+// Processos que entraram juntos (mesma pessoa, com menos de 1 minuto entre um e outro) formam uma importação.
+function gruposImportacao() {
+  const itens = S.processos.filter(p => (p.origem || 'banco') === 'banco' && !isNaN(Date.parse(p.adicionadoEm)))
+    .sort((a, b) => String(a.adicionadoPor).localeCompare(String(b.adicionadoPor)) || Date.parse(a.adicionadoEm) - Date.parse(b.adicionadoEm));
+  const grupos = []; let atual = null, ult = 0;
+  itens.forEach(p => {
+    const t = Date.parse(p.adicionadoEm);
+    if (!atual || atual.por !== p.adicionadoPor || t - ult > 60000) { atual = { por: p.adicionadoPor || '', inicio: p.adicionadoEm, ps: [] }; grupos.push(atual); }
+    atual.ps.push(p); ult = t;
+  });
+  const primeiro = statusLista()[0];
+  grupos.forEach(g => { g.bancos = [...new Set(g.ps.map(p => p.banco).filter(Boolean))];
+    g.trabalhados = g.ps.filter(p => (p.status && p.status !== primeiro) || p.responsavel).length; });
+  return grupos.sort((a, b) => b.inicio.localeCompare(a.inicio));
+}
+function abrirImportacoes() {
+  const d = $('#lotes'); const grupos = gruposImportacao();
+  d.replaceChildren(h('div', { class: 'dlg' }, h('h2', { text: 'Importações' }),
+    h('div', { class: 'mut', text: 'Cada linha é um arquivo (ou lista) que entrou de uma vez. Excluir remove os processos dele, as anotações e as publicações guardadas desses processos. Não dá para desfazer.' }),
+    grupos.length ? h('table', { class: 'tab', style: 'margin-top:12px' }, h('thead', {}, h('tr', {}, ['Quando', 'Por', 'Banco', 'Processos', ''].map(c => h('th', { scope: 'col', text: c })))),
+      h('tbody', {}, grupos.map(g => h('tr', {}, h('td', { text: fmtHora(g.inicio) }), h('td', { text: N.nomeDeEmail(g.por) || '—', title: g.por }), h('td', { text: g.bancos.join(', ') || '—' }),
+        h('td', {}, String(g.ps.length), g.trabalhados ? h('div', { class: 'mut', text: g.trabalhados + ' já com status/responsável' }) : null),
+        h('td', {}, botaoConfirmar('Excluir importação', () => { d.close(); excluirImportacao(g); }, 'link'))))))
+      : h('div', { class: 'vazio', style: 'margin-top:12px', text: 'Nenhuma importação de banco encontrada.' }),
+    h('div', { class: 'barra', style: 'margin-top:12px' }, h('span', { class: 'esp' }), h('button', { text: 'Fechar', onclick: () => d.close() }))));
+  d.showModal();
+}
+function excluirImportacao(g) {
+  const ids = g.ps.map(p => p.id), idSet = new Set(ids), lote = 20;
+  executar('Excluindo importação', async () => {
+    const parar = () => { if (S.cancelar) throw new Error('Interrompido. Nada foi perdido de forma pela metade: abra Importações e repita se quiser concluir.'); };
+    for (let i = 0; i < ids.length; i += 10) {
+      parar(); mostrarProgresso('Excluindo anotações… ' + Math.min(i + 10, ids.length) + ' de ' + ids.length);
+      const evs = (await Promise.all(ids.slice(i, i + 10).map(id => armazem.listarPor('eventos', 'processo', id)))).flat();
+      await Promise.all(evs.map(e => armazem.remover('eventos', e.id)));
+    }
+    const comms = S.comms.filter(c => idSet.has(c.processo) && c.unica !== true);
+    for (let i = 0; i < comms.length; i += lote) { parar(); mostrarProgresso('Excluindo publicações… ' + Math.min(i + lote, comms.length) + ' de ' + comms.length); await Promise.all(comms.slice(i, i + lote).map(c => armazem.remover('comunicacoes', c.id))); }
+    for (let i = 0; i < ids.length; i += lote) { parar(); mostrarProgresso('Excluindo processos… ' + Math.min(i + lote, ids.length) + ' de ' + ids.length); await Promise.all(ids.slice(i, i + lote).map(id => armazem.remover('processos', id))); }
+    aviso('Importação excluída: ' + ids.length + ' processo(s) removido(s).', 'ok');
+  });
 }
 
 /* ---------- Ajustes (admin) ---------- */
